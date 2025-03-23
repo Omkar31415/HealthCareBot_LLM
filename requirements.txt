@@ -1,0 +1,12 @@
+streamlit
+transformers
+torch
+torchaudio
+soundfile
+librosa
+python-dotenv
+anthropic
+nltk
+
+# run this in terminal
+# conda install -c conda-forge ffmpeg
