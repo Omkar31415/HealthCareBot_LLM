@@ -7,10 +7,15 @@ from dotenv import load_dotenv
 import json
 import requests
 import anthropic
+import re
 
 # Load environment variables
 load_dotenv()
 # Load secrets
+# hf_token = os.getenv("HUGGINGFACE_API_KEY")
+# groq_api_key = os.getenv("GROQ_API_KEY")
+# anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+
 hf_token = st.secrets["HUGGINGFACE_API_KEY"]
 groq_api_key = st.secrets["GROQ_API_KEY"]
 anthropic_api_key = st.secrets["ANTHROPIC_API_KEY"]
@@ -176,9 +181,9 @@ def run_physical_health():
                 """
                 
                 if st.session_state.llm_service == "groq":
-                    extracted_conditions = use_groq_api(extract_prompt, max_tokens=50)
+                    extracted_conditions = use_groq_api(extract_prompt, max_tokens=30)
                 else:
-                    extracted_conditions = use_claude_api(extract_prompt, max_tokens=50)
+                    extracted_conditions = use_claude_api(extract_prompt, max_tokens=30)
                 
                 # Add these conditions to our potential list
                 if extracted_conditions and "none" not in extracted_conditions.lower():
@@ -255,7 +260,7 @@ def run_physical_health():
         return audio_classifier
 
     # Use Groq API
-    def use_groq_api(prompt, max_tokens=500):
+    def use_groq_api(prompt, max_tokens=400):
         headers = {
             "Authorization": f"Bearer {groq_api_key}",
             "Content-Type": "application/json"
@@ -397,7 +402,7 @@ def run_physical_health():
         # Get next question using selected API
         try:
             if st.session_state.llm_service == "groq":
-                response = use_groq_api(prompt, max_tokens=500)
+                response = use_groq_api(prompt, max_tokens=400)
             elif st.session_state.llm_service == "claude":  # New condition for Claude
                 response = use_claude_api(prompt, max_tokens=500)
             
@@ -619,7 +624,7 @@ def run_physical_health():
         # Rest of the function remains the same
         try:
             if st.session_state.llm_service == "groq":
-                diagnosis = use_groq_api(prompt, max_tokens=500)
+                diagnosis = use_groq_api(prompt, max_tokens=400)
             else:  # Claude 3 Opus
                 diagnosis = use_claude_api(prompt, max_tokens=500)
             
@@ -655,28 +660,63 @@ def run_physical_health():
             
             with col1:
                 st.markdown("#### Key Findings")
-                # Simplify diagnosis_text into a summary
-                summary_length = 100
-                if len(diagnosis_text) > summary_length:
-                    summary = diagnosis_text[:summary_length].rsplit(' ', 1)[0] + "..."
-                else:
-                    summary = diagnosis_text
-                st.info(f"Summary: {summary}")
+                # Format the diagnosis text to ensure it's displayed properly
+                st.info(f"{diagnosis_text}")
+                
+                # Get primary condition from evidence (highest score)
+                primary_condition = None
+                if condition_evidence:
+                    primary_condition = max(condition_evidence.items(), key=lambda x: x[1])[0]
+                
+                if primary_condition:
+                    st.markdown(f"#### Primary Condition: **{primary_condition}**")
                 
                 st.markdown("#### Self-Care Recommendations")
                 # Fetch self-care recommendations from LLM
-                rec_prompt = f"Based on this diagnosis: '{diagnosis_text}', provide 3 concise self-care recommendations."
+                rec_prompt = f"Based on this diagnosis: '{diagnosis_text}', provide 3 concise self-care recommendations. Format each as a separate recommendation with a number and brief title followed by description. Be specific and actionable."
                 if st.session_state.llm_service == "groq":
-                    rec_response = use_groq_api(rec_prompt, max_tokens=150)
+                    rec_response = use_groq_api(rec_prompt, max_tokens=100)
                 else:
-                    rec_response = use_claude_api(rec_prompt, max_tokens=150)
-                recommendations = rec_response.split("\n")[:3]
-                for rec in recommendations:
-                    if rec.strip():
-                        st.success(f"• {rec.strip()}")
+                    rec_response = use_claude_api(rec_prompt, max_tokens=250)
+                
+                # Parse recommendations more carefully
+                recommendations = []
+                for line in rec_response.split("\n"):
+                    if line.strip():
+                        recommendations.append(line.strip())
+                
+                # Ensure we display the actual number of recommendations we have
+                if recommendations:
+                    st.markdown(f"• Here are **{len(recommendations)}** concise self-care recommendations based on the diagnosis:")
+                    
+                    for rec in recommendations:
+                        if rec.strip():
+                            st.success(f"• {rec.strip()}")
 
             with col2:
-                # Severity status display (kept simple as per your logic)
+                # Severity status display with better highlighting
+                # FIX: Ensure severity_rating has a default value if it's None and extract from diagnosis_text if possible
+                if severity_rating is None:
+                    # Extract severity from diagnosis text if possible
+                    if "SEVERITY RATING: HIGH" in diagnosis_text.upper():
+                        severity_rating = "High"
+                    elif "SEVERITY RATING: MODERATE" in diagnosis_text.upper():
+                        severity_rating = "Moderate"
+                    elif "SEVERITY RATING: LOW" in diagnosis_text.upper():
+                        severity_rating = "Low"
+                    # If still None after trying to extract, default to a meaningful value based on diagnosis
+                    if severity_rating is None and "MODERATE SEVERITY" in diagnosis_text.upper():
+                        severity_rating = "Moderate"
+                    elif severity_rating is None:
+                        severity_rating = "Unknown"  # Better default than None
+                
+                severity_color = {
+                    "High": "red",
+                    "Moderate": "orange",
+                    "Low": "green",
+                    "Unknown": "blue"
+                }.get(severity_rating, "blue")
+                
                 if severity_rating == "High":
                     action_needed = "Immediate Medical Attention"
                 elif severity_rating == "Moderate":
@@ -684,7 +724,7 @@ def run_physical_health():
                 else:
                     action_needed = "Follow Self-Care Guidelines"
                 
-                st.markdown(f"### Severity Level: {severity_rating}")
+                st.markdown(f"### Severity Level: <span style='color:{severity_color};font-weight:bold;'>{severity_rating}</span>", unsafe_allow_html=True)
                 st.write(action_needed)
                 
                 st.markdown("### How are you feeling now?")
@@ -710,83 +750,180 @@ def run_physical_health():
                     key=lambda x: x[1], 
                     reverse=True
                 )[:5]
+                
+                # Display each condition with a more visible score
                 for condition, score in sorted_conditions:
                     if score > 0:
                         percentage = min(score / 5 * 100, 100)
-                        st.write(f"**{condition}**: Probability Score: {score}")
-                        st.progress(percentage / 100)
-            
-            with st.expander("Learn More About These Conditions"):
-                if condition_evidence:
-                    for condition in condition_evidence.keys():
-                        # Fetch condition description from LLM
-                        desc_prompt = f"Provide a brief description (1-2 sentences) of the medical condition '{condition}'."
-                        if st.session_state.llm_service == "groq":
-                            description = use_groq_api(desc_prompt, max_tokens=100)
-                        else:
-                            description = use_claude_api(desc_prompt, max_tokens=100)
-                        st.write(f"**{condition}**: {description.strip()}")
-                else:
-                    st.write("No specific conditions identified yet.")
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            st.write(f"**{condition}**")
+                            st.progress(percentage / 100)
+                        with col2:
+                            st.write(f"Score: **{score}**")
+                
+                with st.expander("Learn More About These Conditions"):
+                    if condition_evidence:
+                        for condition, score in sorted_conditions:
+                            if score > 0:
+                                # Fetch condition description from LLM with specific formatting request
+                                desc_prompt = f"Provide a brief description (2-3 sentences) of the medical condition '{condition}'. Make it informative but accessible to a general audience."
+                                if st.session_state.llm_service == "groq":
+                                    description = use_groq_api(desc_prompt, max_tokens=100)
+                                else:
+                                    description = use_claude_api(desc_prompt, max_tokens=150)
+                                st.write(f"**{condition}**: {description.strip()}")
+                    else:
+                        st.write("No specific conditions identified yet.")
         
         with diagnosis_tabs[2]:  # Recommendations tab
             st.markdown("### Care Recommendations")
             
+            # Get primary condition for more targeted recommendations
+            primary_condition = "unspecified condition"
+            if condition_evidence:
+                primary_condition = max(condition_evidence.items(), key=lambda x: x[1])[0]
+            
             st.markdown("#### Warning Signs - Seek Medical Help If:")
-            # Fetch warning signs from LLM
-            warn_prompt = f"Based on this diagnosis: '{diagnosis_text}' and severity '{severity_rating}', list 3 warning signs indicating the need for immediate medical help."
+            # Fetch warning signs from LLM with improved prompt for specific condition
+            warn_prompt = f"Based on this diagnosis: '{diagnosis_text}' with the condition '{primary_condition}' and severity '{severity_rating}', list 3 specific warning signs indicating the need for immediate medical help. Format each as a separate bullet point with a brief title in bold followed by a short explanation of why this sign requires medical attention."
             if st.session_state.llm_service == "groq":
-                warn_response = use_groq_api(warn_prompt, max_tokens=150)
+                warn_response = use_groq_api(warn_prompt, max_tokens=100)
             else:
-                warn_response = use_claude_api(warn_prompt, max_tokens=150)
-            warnings = warn_response.split("\n")[:3]
-            for warning in warnings:
-                if warning.strip():
-                    st.write(f"⚠️ {warning.strip()}")
+                warn_response = use_claude_api(warn_prompt, max_tokens=250)
+            
+            # More carefully parse the warnings and display them in a visually appealing way
+            warnings = []
+            for line in warn_response.split("\n"):
+                if line.strip():
+                    warnings.append(line.strip())
+            
+            # Use expander for better organization
+            with st.container():
+                for i, warning in enumerate(warnings):
+                    if warning.strip():
+                        st.error(f"⚠️ {warning.strip()}")
             
             st.markdown("#### Medications to Consider")
-            # Fetch medications from LLM
-            med_prompt = f"Based on this diagnosis: '{diagnosis_text}', suggest 3 medications or treatment options."
+            # Fetch medications from LLM with improved prompt
+            med_prompt = f"Based on this diagnosis: '{diagnosis_text}' with the condition '{primary_condition}', suggest 3 medications or treatment options specifically for {primary_condition}. For each, provide a name and brief explanation of how it helps. Format each as a separate paragraph with the medication name in bold."
             if st.session_state.llm_service == "groq":
                 med_response = use_groq_api(med_prompt, max_tokens=150)
             else:
-                med_response = use_claude_api(med_prompt, max_tokens=150)
-            medications = med_response.split("\n")[:3]
-            col1, col2 = st.columns(2)
-            for i, med in enumerate(medications):
-                if med.strip():
-                    with col1 if i % 2 == 0 else col2:
-                        st.write(f"💊 {med.strip()}")
+                med_response = use_claude_api(med_prompt, max_tokens=300)
+            
+            # Parse medications more carefully with better display
+            medications = []
+            in_med = False
+            current_med = ""
+            
+            # Split by paragraphs or numbered items
+            for line in med_response.split("\n"):
+                if line.strip():
+                    # Check if this is a new medication entry
+                    if (re.match(r'^\d+\.', line) or re.search(r'\*\*.*\*\*', line)) and current_med:
+                        medications.append(current_med)
+                        current_med = line.strip()
+                    elif not current_med:
+                        current_med = line.strip()
+                    else:
+                        current_med += " " + line.strip()
+            
+            # Add the last medication
+            if current_med:
+                medications.append(current_med)
+            
+            # If we couldn't parse properly, fall back
+            if not medications:
+                medications = [m for m in med_response.split("\n") if m.strip()]
+            
+            # Layout medications in cards for better visibility
+            if medications:
+                cols = st.columns(len(medications))
+                for i, med in enumerate(medications):
+                    if med.strip():
+                        with cols[i]:
+                            st.info(f"💊 {med.strip()}")
             
             st.markdown("#### Home Care Tips")
-            # Fetch home care tips from LLM
-            care_prompt = f"Based on this diagnosis: '{diagnosis_text}', provide 3 home care tips."
+            # Fetch home care tips from LLM with improved prompt specifically for the primary condition
+            care_prompt = f"Based on this diagnosis: '{diagnosis_text}' with the condition '{primary_condition}', provide 3 specific, detailed home care tips for treating {primary_condition}. Format each as a separate paragraph with a bold title followed by explanation. Ensure these tips are appropriate for {primary_condition} specifically."
             if st.session_state.llm_service == "groq":
                 care_response = use_groq_api(care_prompt, max_tokens=150)
             else:
-                care_response = use_claude_api(care_prompt, max_tokens=150)
-            home_care = care_response.split("\n")[:3]
-            for tip in home_care:
+                care_response = use_claude_api(care_prompt, max_tokens=300)
+            
+            # Parse home care tips with better display
+            home_care = []
+            current_tip = ""
+            
+            # Split by paragraphs or numbered items
+            for line in care_response.split("\n"):
+                if line.strip():
+                    # Check if this is a new tip entry
+                    if (re.match(r'^\d+\.', line) or re.search(r'\*\*.*\*\*', line)) and current_tip:
+                        home_care.append(current_tip)
+                        current_tip = line.strip()
+                    elif not current_tip:
+                        current_tip = line.strip()
+                    else:
+                        current_tip += " " + line.strip()
+            
+            # Add the last tip
+            if current_tip:
+                home_care.append(current_tip)
+            
+            # If we couldn't parse properly, fall back
+            if not home_care:
+                home_care = [tip for tip in care_response.split("\n") if tip.strip()]
+            
+            # Display home care tips in visually appealing cards
+            for i, tip in enumerate(home_care):
                 if tip.strip():
-                    st.write(f"✅ {tip.strip()}")
+                    st.success(f"✅ {tip.strip()}")
         
         with diagnosis_tabs[3]:  # Action Steps tab
             st.markdown("### Next Steps")
             
             if severity_rating in ["High", "Moderate"]:
                 st.markdown("#### Medical Consultation")
-                # Fetch specialists from LLM
-                spec_prompt = f"Based on this diagnosis: '{diagnosis_text}' and conditions: {list(condition_evidence.keys())}, suggest 3 types of medical specialists to consult."
+                # Get primary condition for more targeted specialist recommendations
+                primary_condition = "unspecified condition"
+                if condition_evidence:
+                    primary_condition = max(condition_evidence.items(), key=lambda x: x[1])[0]
+                
+                # Fetch specialists from LLM with improved prompt
+                spec_prompt = f"Based on this diagnosis: '{diagnosis_text}' with the condition '{primary_condition}', suggest 3 specific types of medical specialists that would be appropriate to consult for {primary_condition}. For each specialist, explain briefly why they would be helpful for this condition."
                 if st.session_state.llm_service == "groq":
                     spec_response = use_groq_api(spec_prompt, max_tokens=150)
                 else:
-                    spec_response = use_claude_api(spec_prompt, max_tokens=150)
-                specialists = spec_response.split("\n")[:3]
-                col1, col2 = st.columns(2)
-                for i, spec in enumerate(specialists):
-                    if spec.strip():
-                        with col1 if i % 2 == 0 else col2:
-                            st.write(f"👨‍⚕️ {spec.strip()}")
+                    spec_response = use_claude_api(spec_prompt, max_tokens=300)
+                
+                # Parse specialists more carefully
+                specialists = []
+                current_spec = ""
+                for line in spec_response.split("\n"):
+                    if line.strip():
+                        if (re.match(r'^\d+\.', line) or re.search(r'\*\*.*\*\*', line)) and current_spec:
+                            specialists.append(current_spec)
+                            current_spec = line.strip()
+                        elif not current_spec:
+                            current_spec = line.strip()
+                        else:
+                            current_spec += " " + line.strip()
+                
+                if current_spec:  # Add the last one
+                    specialists.append(current_spec)
+                
+                # If we couldn't parse properly, fall back to simple splitting
+                if not specialists:
+                    specialists = [spec for spec in spec_response.split("\n") if spec.strip()]
+                
+                # Layout specialists in cards for better visibility
+                if specialists:
+                    for i, spec in enumerate(specialists):
+                        if spec.strip():
+                            st.info(f"👨‍⚕️ {spec.strip()}")
                 
                 st.markdown("#### Schedule Consultation")
                 col1, col2 = st.columns(2)
@@ -801,15 +938,45 @@ def run_physical_health():
             with st.expander("Add Symptom Entry"):
                 with st.form("symptom_tracker"):
                     st.date_input("Date", value=None)
-                    st.slider("Temperature (°F)", min_value=96.0, max_value=104.0, value=98.6, step=0.1)
-                    st.slider("Cough Severity", min_value=0, max_value=10, value=5)
+                    
+                    # Make symptom fields dynamic based on primary condition
+                    primary_condition = ""
+                    if condition_evidence:
+                        primary_condition = max(condition_evidence.items(), key=lambda x: x[1])[0].lower()
+                    
+                    # Custom symptom fields based on condition type
+                    if "arthritis" in primary_condition or "joint" in primary_condition or "knee" in primary_condition:
+                        st.slider("Pain Level", min_value=0, max_value=10, value=5)
+                        st.slider("Swelling", min_value=0, max_value=10, value=3)
+                        st.slider("Mobility", min_value=0, max_value=10, value=5)
+                        st.slider("Stiffness", min_value=0, max_value=10, value=4)
+                    elif "respiratory" in primary_condition or "cold" in primary_condition or "flu" in primary_condition:
+                        st.slider("Temperature (°F)", min_value=96.0, max_value=104.0, value=98.6, step=0.1)
+                        st.slider("Cough Severity", min_value=0, max_value=10, value=5)
+                        st.slider("Congestion Level", min_value=0, max_value=10, value=4)
+                        st.slider("Fatigue Level", min_value=0, max_value=10, value=5)
+                    elif "headache" in primary_condition or "migraine" in primary_condition:
+                        st.slider("Pain Intensity", min_value=0, max_value=10, value=5)
+                        st.slider("Duration (hours)", min_value=1, max_value=72, value=4)
+                        st.multiselect("Associated Symptoms", 
+                                        ["Nausea", "Light Sensitivity", "Sound Sensitivity", "Aura", "Dizziness"])
+                    else:
+                        # Default symptoms if no specific condition pattern matches
+                        st.slider("Temperature (°F)", min_value=96.0, max_value=104.0, value=98.6, step=0.1)
+                        st.slider("Pain Level", min_value=0, max_value=10, value=5)
+                        st.slider("Fatigue Level", min_value=0, max_value=10, value=4)
+                    
                     st.slider("Overall Feeling", min_value=0, max_value=10, value=5)
+                    st.text_area("Additional Notes", "")
                     st.form_submit_button("Save Symptom Entry")
         
+        # Footer information with better styling
         st.markdown("---")
-        st.write("### Important Note")
-        st.write("Monitor your symptoms closely and seek medical attention if they worsen.")
-        st.caption("This assessment is for testing and educational purposes only.")
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            st.warning("### Important Note")
+            st.write("Monitor your symptoms closely and seek medical attention if they worsen.")
+            st.caption("This assessment is for testing and educational purposes only.")
         
         st.markdown("### What would you like to do next?")
         next_steps = st.columns(3)
@@ -819,20 +986,27 @@ def run_physical_health():
                 # Generate PDF content dynamically
                 pdf_content = "Your Diagnostic Assessment\n\n"
                 pdf_content += f"Severity Level: {severity_rating}\nAction Needed: {action_needed}\n\n"
-                pdf_content += f"Summary: {summary}\n\nConditions:\n"
+                pdf_content += f"Summary: {diagnosis_text}\n\nConditions:\n"
                 if condition_evidence:
                     sorted_conditions = sorted(condition_evidence.items(), key=lambda x: x[1], reverse=True)[:5]
                     for condition, score in sorted_conditions:
-                        desc_prompt = f"Provide a brief description of '{condition}'."
-                        if st.session_state.llm_service == "groq":
-                            description = use_groq_api(desc_prompt, max_tokens=100)
-                        else:
-                            description = use_claude_api(desc_prompt, max_tokens=100)
-                        pdf_content += f"- {condition} (Score: {score}): {description.strip()}\n"
+                        if score > 0:
+                            desc_prompt = f"Provide a brief description of '{condition}'."
+                            if st.session_state.llm_service == "groq":
+                                description = use_groq_api(desc_prompt, max_tokens=50)
+                            else:
+                                description = use_claude_api(desc_prompt, max_tokens=100)
+                            pdf_content += f"- {condition} (Score: {score}): {description.strip()}\n"
                 pdf_content += "\nCare Recommendations:\n"
-                pdf_content += "Warning Signs:\n" + "\n".join([f"- {w.strip()}" for w in warnings if w.strip()]) + "\n"
-                pdf_content += "Medications:\n" + "\n".join([f"- {m.strip()}" for m in medications if m.strip()]) + "\n"
-                pdf_content += "Home Care Tips:\n" + "\n".join([f"- {t.strip()}" for t in home_care if t.strip()]) + "\n"
+                
+                # Include all the recommendations we generated
+                if 'warnings' in locals():
+                    pdf_content += "Warning Signs:\n" + "\n".join([f"- {w.strip()}" for w in warnings if w.strip()]) + "\n"
+                if 'medications' in locals():
+                    pdf_content += "Medications:\n" + "\n".join([f"- {m.strip()}" for m in medications if m.strip()]) + "\n"
+                if 'home_care' in locals():
+                    pdf_content += "Home Care Tips:\n" + "\n".join([f"- {t.strip()}" for t in home_care if t.strip()]) + "\n"
+                
                 pdf_content += "\nFull Diagnosis:\n" + diagnosis_text
                 
                 # Convert to bytes for download
