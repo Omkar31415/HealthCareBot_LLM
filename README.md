@@ -24,13 +24,16 @@ git clone https://github.com/Omkar31415/HealthCareBot_LLM.git
 cd HealthCareBot_LLM
 
 # Create virtual environment
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+conda create -p venv python==3.10 -y
 
 # Install dependencies
 pip install -r requirements.txt
 ```
 ## Instructions to run
+
+Uncomment these commands in physical_health.py and mental_health.py
+os.getenv("KEYS") 
+
 Run the App
 ```
 streamlit run app.py
