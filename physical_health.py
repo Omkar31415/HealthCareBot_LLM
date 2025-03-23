@@ -10,9 +10,10 @@ import anthropic
 
 # Load environment variables
 load_dotenv()
-hf_token = os.getenv("HUGGINGFACE_API_KEY")
-groq_api_key = os.getenv("GROQ_API_KEY")
-anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+# Load secrets
+hf_token = st.secrets["HUGGINGFACE_API_KEY"]
+groq_api_key = st.secrets["GROQ_API_KEY"]
+anthropic_api_key = st.secrets["ANTHROPIC_API_KEY"]
 
 def run_physical_health():
     # Initialize session state variables

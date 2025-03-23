@@ -10,7 +10,9 @@ import time
 
 # Load environment variables
 load_dotenv()
-groq_api_key = os.getenv("GROQ_API_KEY")
+#groq_api_key = os.getenv("GROQ_API_KEY")
+# Load secrets
+groq_api_key = st.secrets["GROQ_API_KEY"]
 
 def run_mental_health():
     # Initialize NLTK resources if not already downloaded
